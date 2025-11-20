@@ -229,3 +229,17 @@ for dep_var in ['Capacity Utilization Rate (%)', 'Profit Margin (%)']:
     alt_res = alt_mod.fit(cov_type='clustered', cluster_entity=True)
     print(f"\nAlternative Model Summary for {dep_var}:")
     print(alt_res.summary)
+
+print("\n--- Residual Diagnostics for Dynamic Panel Models ---")
+for dep_var, res_dict in results.items():
+    if 'Dynamic' in res_dict:
+        model_res = res_dict['Dynamic']
+        residuals = model_res.resids
+        plt.figure(figsize=(10,4))
+        sns.histplot(residuals, kde=True)
+        plt.title(f'Residual Distribution for Dynamic Model ({dep_var})')
+        plt.xlabel('Residuals')
+        plt.ylabel('Frequency')
+        plt.show()
+    else:
+        print(f"Dynamic model results not found for {dep_var}.")

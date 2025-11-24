@@ -1,0 +1,118 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.api import VAR
+import numpy as np
+from google.colab import files
+
+# Set plot style
+sns.set(style="whitegrid")
+
+# Step 1: Upload dataset interactively in Google Colab
+print("Please upload your Excel file (e.g., macro_commodities.xlsx)")
+uploaded = files.upload()
+
+# Extract the uploaded filename
+file_path = next(iter(uploaded))
+print(f"Uploaded file detected: {file_path}")
+
+# Load dataset
+data = pd.read_excel(file_path)
+
+# Preview the data
+print("Data preview:")
+print(data.head())
+
+# Convert the date column to datetime format
+data['date'] = pd.to_datetime(data['date'])
+
+# Set date as index
+data.set_index('date', inplace=True)
+
+# Variables to analyze
+variables = ['copper_imports', 'cpi_yoy', 'cgb_10y_yield']
+
+# Step 2: Plot time series for seasonality inspection
+plt.figure(figsize=(15, 10))
+for i, var in enumerate(variables, 1):
+    plt.subplot(3, 1, i)
+    plt.plot(data.index, data[var], label=var)
+    plt.title(f'Time Series Plot of {var}')
+    plt.xlabel('Date')
+    plt.ylabel(var)
+    plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Step 3: ADF Test function
+def adf_test(series, signif=0.05, name=''):
+    """Perform ADF test and print results"""
+    print(f'\nADF Test for {name}')
+    result = adfuller(series.dropna(), autolag='AIC')
+    adf_stat, p_value, used_lag, n_obs, crit_values, icbest = result
+
+    print(f'ADF Statistic: {adf_stat}')
+    print(f'p-value: {p_value}')
+    print(f'Used lag: {used_lag}')
+    print(f'Number of observations: {n_obs}')
+    print('Critical Values:')
+    for key, val in crit_values.items():
+        print(f'   {key}: {val}')
+
+    if p_value <= signif:
+        print(f"Result: {name} is stationary (reject H0 at {signif} level)")
+        return True
+    else:
+        print(f"Result: {name} is non-stationary (fail to reject H0 at {signif} level)")
+        return False
+
+# Step 4: Conduct ADF test on each variable
+stationary_status = {}
+differences = {}
+for var in variables:
+    stationary_status[var] = adf_test(data[var], name=var)
+    differences[var] = 0
+
+# Step 5: Differencing if necessary until stationary
+diff_data = data.copy()
+for var in variables:
+    while not stationary_status[var]:
+        print(f"\nDifferencing variable: {var}")
+        diff_data[var] = diff_data[var].diff()
+        differences[var] += 1
+        # Recheck stationarity after differencing
+        stationary_status[var] = adf_test(diff_data[var], name=f"{var} ({differences[var]} difference{'s' if differences[var] > 1 else ''})")
+
+# Drop initial NA values caused by differencing
+diff_data.dropna(inplace=True)
+
+print(f"\nDifferences applied to variables: {differences}")
+
+# Step 6: VAR model fitting on stationary data
+# Select optimal lag length using AIC
+model = VAR(diff_data[variables])
+lag_order_result = model.select_order(maxlags=12)
+optimal_lag = lag_order_result.aic
+print(f"\nOptimal lag order by AIC: {optimal_lag}")
+
+# Fit VAR model
+var_model = model.fit(optimal_lag)
+print(var_model.summary())
+
+# Step 7: Impulse Response Analysis
+# Calculate and plot the Impulse Response Functions (IRFs)
+irf = var_model.irf(periods=10) # Specify the number of periods for the response
+
+# Plot the IRFs
+irf.plot(orth=False, figsize=(15, 10), signif=0.05, plot_stderr=True)
+plt.suptitle('Impulse Response Functions (Non-Orthogonalized)', y=1.02, fontsize=16)
+plt.tight_layout()
+plt.show()
+
+# Optionally, plot orthogonalized IRFs if the residuals are correlated
+# If the correlation matrix of residuals shows significant values, orthogonalized IRFs are more appropriate
+irf.plot(orth=True, figsize=(15, 10), signif=0.05, plot_stderr=True)
+plt.suptitle('Impulse Response Functions (Orthogonalized)', y=1.02, fontsize=16)
+plt.tight_layout()
+plt.show()

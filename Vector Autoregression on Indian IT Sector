@@ -1,0 +1,337 @@
+# =============================================================================
+# VECTOR AUTOREGRESSION (VAR) ANALYSIS: India IT Exports & Macro Variables
+# Google Colab Ready | Q1 2015 - Q3 2025 | Dual IRF (Normal + Orthogonalized)
+# =============================================================================
+
+# =============================================================================
+## 0. GOOGLE COLAB FILE UPLOAD & AUTOMATIC EXECUTION
+# =============================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.api import VAR
+from statsmodels.tsa.stattools import adfuller, grangercausalitytests
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.seasonal import STL
+import warnings
+warnings.filterwarnings('ignore')
+
+# Colab plotting settings
+plt.style.use('seaborn-v0_8')
+sns.set_palette("husl")
+plt.rcParams['figure.figsize'] = (15, 10)
+%matplotlib inline
+%config InlineBackend.figure_format = 'retina'
+
+print("🚀 VAR Analysis Environment Ready!")
+
+# AUTOMATIC FILE UPLOAD FOR GOOGLE COLAB
+from google.colab import files
+print("\n📁 Please upload 'var_exports_macro_india_it.csv':")
+uploaded = files.upload()
+
+# Load the uploaded file (handles single file automatically)
+filename = list(uploaded.keys())[0]
+df = pd.read_csv(filename)
+print(f"✅ Loaded: {filename} | Shape: {df.shape}")
+
+# =============================================================================
+## 1. DATA PREPROCESSING (Quarterly → Datetime Index)
+# =============================================================================
+
+# Parse quarterly dates: "Q1 2015" → datetime quarterly index
+# Convert 'Q1 2015' to '2015Q1' format for robust PeriodIndex parsing
+df['formatted_quarter'] = df['Quarter'].str.replace(r'(Q\d)\s(\d{4})', r'\2\1', regex=True)
+df['date'] = pd.PeriodIndex(df['formatted_quarter'], freq='Q').to_timestamp()
+df = df.set_index('date').drop(['Quarter', 'formatted_quarter'], axis=1)
+
+print(f"\n📅 Date range: {df.index.min()} to {df.index.max()}")
+print(f"📊 Variables: {list(df.columns)}")
+print("\nFirst 5 rows:")
+print(df.head())
+
+# Define analysis variables
+variables = ['India_IT_Exports_USD_Bn', 'US_GDP_Growth_QoQ_Ann_%',
+             'Global_IT_Spend_Growth_%_YoY', 'INR_USD_Exchange_Rate']
+
+# =============================================================================
+## 2. EXPLORATORY DATA ANALYSIS (All Requested Visualizations)
+# =============================================================================
+
+# 2.1 Time Series Plots
+fig, axes = plt.subplots(4, 1, figsize=(15, 16))
+fig.suptitle('India IT Exports & Macro Variables: Quarterly Time Series (2015Q1-2025Q3)',
+             fontsize=16, fontweight='bold', y=0.98)
+
+for i, var in enumerate(variables):
+    axes[i].plot(df.index, df[var], linewidth=2.5, marker='o', markersize=4, color=f'C{i}')
+    axes[i].set_title(f'{var}', fontweight='bold')
+    axes[i].grid(True, alpha=0.3)
+    axes[i].tick_params(axis='x', rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+# 2.2 Correlation Matrix Heatmap
+plt.figure(figsize=(10, 8))
+corr_matrix = df[variables].corr()
+sns.heatmap(corr_matrix, annot=True, cmap='RdBu_r', center=0, square=True,
+            linewidths=0.8, cbar_kws={'shrink': 0.8}, fmt='.3f')
+plt.title('Correlation Matrix: Macroeconomic Interdependencies', fontsize=14, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+# 2.3 Quarterly Seasonal Decomposition (STL)
+fig = plt.figure(figsize=(16, 16))
+fig.suptitle('STL Quarterly Seasonal Decomposition (Period=4)', fontsize=16, fontweight='bold')
+
+for i, var in enumerate(variables):
+    plt.subplot(4, 2, 2*i+1)
+    stl = STL(df[var], period=4, robust=True).fit()
+    stl.plot()
+    plt.title(f'{var}', fontweight='bold')
+    plt.tight_layout()
+
+plt.show()
+
+# 2.4 ACF & PACF Plots
+fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+fig.suptitle('Autocorrelation Function (ACF) & Partial ACF (PACF)', fontsize=16, fontweight='bold')
+
+for i, var in enumerate(variables):
+    plot_acf(df[var], ax=axes[0,i], lags=12, title=f'{var} - ACF')
+    plot_pacf(df[var], ax=axes[1,i], lags=12, title=f'{var} - PACF')
+
+plt.tight_layout()
+plt.show()
+
+# =============================================================================
+## 3. STATIONARITY TESTS & AUTOMATIC DIFFERENCING
+# =============================================================================
+
+def run_adf_test(series, title='', max_diffs=2):
+    """Test stationarity and return optimal differencing order"""
+    current_series = series.copy()
+    print(f"\n{title}:")
+
+    for d in range(max_diffs + 1):
+        result = adfuller(current_series.dropna(), autolag='AIC')
+        print(f"  Diff-{d}: ADF={result[0]:.4f}, p={result[1]:.4f}", end='')
+
+        if result[1] < 0.05:
+            print(" ✅ STATIONARY")
+            return d, result
+        current_series = current_series.diff().dropna()
+
+    print(" ⚠️ Non-stationary")
+    return max_diffs, result
+
+# Test each variable
+diff_orders = {}
+adf_results = {}
+
+print("\n" + "="*70)
+print("STATIONARITY ANALYSIS (Augmented Dickey-Fuller)")
+print("="*70)
+
+for var in variables:
+    order, result = run_adf_test(df[var], f'{var}')
+    diff_orders[var] = order
+    adf_results[var] = result
+
+print(f"\n🎯 Optimal differencing: {diff_orders}")
+
+# Apply differencing to achieve stationarity
+diff_data = df.copy()
+for var in variables:
+    order = diff_orders[var]
+    if order > 0:
+        diff_data[var] = df[var].diff(order)
+
+# Align all series (drop missing values from differencing)
+diff_data = diff_data.dropna()
+print(f"\n📈 Stationary dataset shape: {diff_data.shape}")
+print(f"   Date range: {diff_data.index[0]} to {diff_data.index[-1]}")
+
+# =============================================================================
+## 4. VAR MODEL: AIC LAG SELECTION & ESTIMATION
+# =============================================================================
+
+print("\n" + "="*70)
+print("VAR MODEL: AUTOMATIC LAG SELECTION (AIC)")
+print("="*70)
+
+# Lag selection (max 4 lags for quarterly data)
+model = VAR(diff_data)
+lag_results = model.select_order(maxlags=4)
+print(lag_results.summary())
+
+optimal_lag = lag_results.aic
+print(f"\n🎯 Optimal AIC lag order: {optimal_lag}")
+
+# Fit VAR model
+var_model = model.fit(optimal_lag)
+print("\n" + "="*70)
+print(f"VAR({optimal_lag}) MODEL FITTED SUCCESSFULLY")
+print("="*70)
+print(var_model.summary())
+
+# =============================================================================
+## 5. GRANGER CAUSALITY TESTS
+# =============================================================================
+
+print("\n" + "="*70)
+print("GRANGER CAUSALITY TESTS (maxlag=" + str(optimal_lag) + ")")
+print("="*70)
+
+for target in diff_data.columns:
+    print(f"\nDoes {target} Granger-cause others?")
+    test_vars = [col for col in diff_data.columns if col != target]
+
+    for cause in test_vars:
+        try:
+            gc_test = grangercausalitytests(diff_data[[cause, target]],
+                                          maxlag=optimal_lag, verbose=False)
+            pvals = [gc_test[i+1][0]['ssr_ftest'][1] for i in range(optimal_lag)]
+            min_p = min(pvals)
+            print(f"  {cause} → {target}: p={min_p:.4f} {'✅' if min_p<0.05 else '❌'}")
+        except:
+            print(f"  {cause} → {target}: Insufficient data")
+
+# =============================================================================
+## 6. DUAL IMPULSE RESPONSE FUNCTIONS (Normal + Orthogonalized)
+# =============================================================================
+
+# 6.1 NORMALIZED IMPULSE RESPONSES (Cholesky not applied)
+print("\n" + "="*70)
+print("IMPULSE RESPONSE FUNCTIONS")
+print("="*70)
+
+irf_periods = 8  # 2 years of quarterly data
+irf_normal = var_model.irf(periods=irf_periods)
+
+# Plot NORMALIZED IRFs
+fig = irf_normal.plot(orth=False, figsize=(16, 12), subplot_params={'fontsize': 10})
+plt.suptitle('Normal Impulse Response Functions (8 quarters ahead)', fontsize=16, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+# Plot ORTHOGONALIZED IRFs (Cholesky decomposition)
+fig = irf_normal.plot(orth=True, figsize=(16, 12), subplot_params={'fontsize': 10})
+plt.suptitle('Orthogonalized Impulse Response Functions (Cholesky, 8 quarters)', fontsize=16, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+# =============================================================================
+## 7. FORECAST ERROR VARIANCE DECOMPOSITION (FEVD)
+# =============================================================================
+
+fevd = var_model.fevd(irf_periods)
+fevd.plot(figsize=(15, 12))
+plt.suptitle('Forecast Error Variance Decomposition (8 quarters)', fontsize=16, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+# FEVD Summary Table
+# Manually construct a DataFrame for the FEVD summary
+columns_fevd = pd.MultiIndex.from_product([['Forecast Error Variance Decomposition'], diff_data.columns])
+fevd_summary_data = []
+
+# Determine the actual number of periods available in fevd.decomp
+# This assumes fevd.decomp.shape[0] accurately reflects the periods for which FEVD was computed.
+actual_fevd_periods = fevd.decomp.shape[0]
+
+for h in range(actual_fevd_periods):
+    for j, response_var in enumerate(diff_data.columns):
+        # Corrected: Access fevd.decomp instead of fevd.orth_var_dec
+        row_values = fevd.decomp[h, j, :].tolist()
+        index_values = (h + 1, response_var)
+        fevd_summary_data.append((index_values, row_values))
+
+row_index = pd.MultiIndex.from_tuples([item[0] for item in fevd_summary_data], names=['Horizon', 'Response Variable'])
+data_values = [item[1] for item in fevd_summary_data]
+
+fevd_summary = pd.DataFrame(data_values, index=row_index, columns=columns_fevd)
+
+print("\nFEVD Summary (selected horizons):")
+# Adjust iloc indexing to select valid horizons if actual_fevd_periods is less than expected
+selected_horizons_to_print = [idx for idx in [0, 2, 4, 7] if idx < actual_fevd_periods]
+if not selected_horizons_to_print:
+    # If no explicitly selected horizons are valid, print the first few rows
+    print(fevd_summary.head().round(3))
+else:
+    print(fevd_summary.iloc[selected_horizons_to_print].round(3))
+
+# =============================================================================
+## 8. FORECASTING (Next 4 Quarters)
+# =============================================================================
+
+forecast_steps = 4
+forecast = var_model.forecast(diff_data.values, steps=forecast_steps)
+
+# Create forecast index
+last_date = diff_data.index[-1]
+forecast_index = pd.date_range(start=last_date + pd.DateOffset(months=3),
+                              periods=forecast_steps, freq='Q')
+
+forecast_df = pd.DataFrame(forecast, index=forecast_index, columns=diff_data.columns)
+
+print("\n" + "="*70)
+print("4-QUARTER AHEAD FORECASTS")
+print("="*70)
+print(forecast_df.round(4))
+
+# Forecast visualization
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+fig.suptitle('VAR Forecasts vs Historical Data (Last 8 + Next 4 Quarters)',
+             fontsize=16, fontweight='bold')
+
+for i, var in enumerate(diff_data.columns):
+    ax = axes[i//2, i%2]
+    hist_recent = diff_data[var].tail(8)
+    ax.plot(hist_recent.index, hist_recent.values, 'o-', linewidth=2.5,
+            label='Historical', markersize=6)
+    ax.plot(forecast_df.index, forecast_df[var], 's-', linewidth=3,
+            label='Forecast', color='red', markersize=8)
+    ax.set_title(f'{var}', fontweight='bold')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.tick_params(axis='x', rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+# =============================================================================
+## 9. RESIDUAL DIAGNOSTICS
+# =============================================================================
+
+residuals = var_model.resid
+fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+fig.suptitle('Model Residuals Diagnostics', fontsize=16, fontweight='bold')
+
+for i, var in enumerate(residuals.columns):
+    axes[i//2, i%2].plot(residuals.index, residuals[var], alpha=0.7)
+    axes[i//2, i%2].set_title(f'Residuals: {var}')
+    axes[i//2, i%2].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+print("\n" + "="*80)
+print("🎉 COMPLETE VAR ANALYSIS SUCCESSFUL!")
+print("="*80)
+print("✅ Auto file upload for Google Colab")
+print("✅ All requested EDA (time series, correlation, STL, ACF/PACF)")
+print("✅ Auto-stationarity testing + differencing")
+print("✅ AIC lag selection")
+print("✅ VAR model estimation")
+print("✅ DUAL IRFs: Normal + Orthogonalized (Cholesky)")
+print("✅ Granger causality tests")
+print("✅ FEVD analysis")
+print("✅ 4-quarter forecasts")
+print("✅ Residual diagnostics")
+
+print(f"\n📊 Dataset: {df.shape[0]} quarters (2015Q1-{df.index[-1].strftime('%Y')}{'Q'+str((df.index[-1].month-1)//3+1)})")
+print(f"🎯 Optimal lags: VAR({optimal_lag})")

@@ -1,0 +1,134 @@
+# Spectral Analysis of Indian Currency Volatility (Colab-Ready)
+# Dataset: Log-returns.xlsx (Daily log returns INR/USD-like, 2021-2025+)
+# Run in Google Colab: Upload file first!
+
+# Step 0: Upload file (Colab-specific)
+from google.colab import files
+import io
+uploaded = files.upload()  # Upload 'Log-returns.xlsx' here
+filename = list(uploaded.keys())[0]  # Gets uploaded file name
+
+# Step 1: Install & imports
+!pip install statsmodels openpyxl -q
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+from scipy.signal import periodogram, welch
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.graphics.tsaplots import plot_acf
+plt.style.use('seaborn-v0_8-darkgrid')
+%matplotlib inline
+
+# Step 2: Load uploaded data
+df = pd.read_excel(io.BytesIO(uploaded[filename]), sheet_name='Sheet1')
+df['Date'] = pd.to_datetime(df['Date'])
+df.set_index('Date', inplace=True)
+df = df.sort_index()
+log_returns = df['Log Returns'].dropna()
+print(f"Loaded {len(log_returns)} obs: {log_returns.index[0].date()} to {log_returns.index[-1].date()} [file:1]")
+print(log_returns.head(10))
+print("\nSummary:\n", log_returns.describe())
+
+# Step 3: EDA - Volatility focus
+fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+
+axes[0,0].plot(log_returns.index, log_returns, alpha=0.7, label='Log Returns')
+roll_vol = log_returns.rolling(21).std() * np.sqrt(252)
+axes[0,0].plot(roll_vol.index, roll_vol, color='red', lw=2, label='Roll Vol (21d ann.)')
+axes[0,0].set_title('Time Series & Rolling Volatility')
+axes[0,0].legend(); axes[0,0].grid(True)
+
+axes[0,1].hist(log_returns, bins=50, density=True, alpha=0.7, edgecolor='black')
+axes[0,1].set_title('Log Returns Distribution')
+
+sm.qqplot(log_returns, line='s', ax=axes[1,0])
+axes[1,0].set_title('QQ Plot (Normality)')
+
+plot_acf(log_returns, lags=40, ax=axes[1,1])
+axes[1,1].set_title('ACF: Log Returns')
+
+plt.tight_layout()
+plt.show()
+
+sq_returns = log_returns ** 2
+plot_acf(sq_returns, lags=40)
+plt.title('ACF: Squared Returns (Vol Clustering)')
+plt.show()
+
+adf = adfuller(log_returns)
+print(f"ADF p-value: {adf[1]:.4f} (Stationary: {adf[1]<0.05})")
+
+# Step 4: Spectral Analysis (fs=1 daily)
+n, fs = len(log_returns), 1.0
+f = np.linspace(0, 0.5, n//2)
+# The original 'periods' array was not used directly for plotting after corrections
+# periods = 1/f[1:]
+
+# Raw log returns periodogram
+f_raw, pxx_raw = periodogram(log_returns)
+plt.figure(figsize=(14,5))
+plt.subplot(1,2,1)
+plt.semilogy(f_raw[1:], pxx_raw[1:])
+plt.title('Periodogram: Raw Log Returns'); plt.xlabel('Freq (cyc/day)'); plt.grid(True)
+plt.subplot(1,2,2)
+periods_raw = 1 / f_raw[1:] # Calculate periods directly from f_raw
+plt.semilogy(periods_raw, pxx_raw[1:])
+plt.xlim(2,500); plt.xlabel('Period (days)'); plt.title('Raw (Periods)')
+plt.axvline(5, ls='--', c='r', label='Weekly'); plt.axvline(22, ls='--', c='g', label='Monthly')
+plt.legend(); plt.grid(True)
+plt.tight_layout(); plt.show()
+
+# Squared returns (volatility)
+f_sq, pxx_sq = periodogram(sq_returns)
+plt.figure(figsize=(14,5))
+plt.subplot(1,2,1)
+plt.semilogy(f_sq[1:], pxx_sq[1:], color='orange')
+plt.title('Periodogram: Squared Returns (Vol)'); plt.xlabel('Freq'); plt.grid(True)
+plt.subplot(1,2,2)
+periods_sq = 1 / f_sq[1:] # Calculate periods directly from f_sq
+plt.semilogy(periods_sq, pxx_sq[1:], color='orange')
+plt.xlim(2,500); plt.xlabel('Period (days)'); plt.title('Vol (Periods)')
+plt.axvline(5, ls='--', c='r'); plt.axvline(22, ls='--', c='g')
+plt.legend(); plt.grid(True)
+plt.tight_layout(); plt.show()
+
+# Step 5: Robustness
+# Convert Series to numpy arrays for compatibility with scipy.signal.welch
+f_w_raw, p_w_raw = welch(log_returns.values, fs=fs, nperseg=min(256,len(log_returns)//4))
+plt.figure(figsize=(12,4))
+plt.semilogy(f_w_raw[1:], p_w_raw[1:], lw=2, label='Welch Raw')
+plt.semilogy(f_raw[1:np.min((len(pxx_raw),len(p_w_raw)) )], pxx_raw[1:np.min((len(pxx_raw),len(p_w_raw)) )], '--', alpha=0.7, label='Periodogram')
+plt.title('Robust: Welch vs Periodogram (Raw)'); plt.legend(); plt.grid(True)
+plt.show()
+
+f_w_sq, p_w_sq = welch(sq_returns.values, fs=fs, nperseg=min(256,len(sq_returns)//4))
+plt.figure(figsize=(12,4))
+plt.semilogy(f_w_sq[1:], p_w_sq[1:], lw=2, color='orange', label='Welch Sq')
+plt.semilogy(f_sq[1:np.min((len(pxx_sq),len(p_w_sq)) )], pxx_sq[1:np.min((len(pxx_sq),len(p_w_sq)) )], '--', alpha=0.7, label='Periodogram Sq')
+plt.title('Robust: Welch vs Periodogram (Squared)'); plt.legend(); plt.grid(True)
+plt.show()
+
+# Hann taper
+window = signal.windows.hann(n)
+f_h_raw, p_h_raw = periodogram(log_returns.values * window, fs=fs)
+plt.figure(figsize=(12,4))
+plt.semilogy(f_h_raw[1:], p_h_raw[1:], lw=2, label='Hann Taper Raw')
+plt.semilogy(f_raw[1:len(p_h_raw)], pxx_raw[1:len(p_h_raw)], '--', alpha=0.7, label='No Taper')
+plt.title('Robust: Hann Window (Raw)'); plt.legend(); plt.grid(True)
+plt.show()
+
+# Step 6: Interpretation
+print("\n=== RESULTS INTERPRETATION ===")
+print("- Peaks in squared PSD show vol cycles (e.g., 5d weekly, 22d monthly business). High low-freq power = persistent trends.")
+print("- Raw near-flat = efficiency; squared clustering confirms GARCH-like vol.")
+print("- Welch/Hann robust: Consistent peaks reliable. Caveats: Leakage, sample bias at extremes.")
+print("- Next: Bandpass filter peaks for trading signals (e.g., 20-30d vol). [file:1]")
+
+# Top peaks (squared)
+peaks = np.argsort(pxx_sq[1:])[-5:][::-1] + 1
+print("\nTop 5 Vol Peaks:")
+for i, p in enumerate(peaks):
+    per = 1 / f_sq[p]
+    print(f"#{i+1}: Period={per:.1f} days, Freq={f_sq[p]:.4f}, Power={pxx_sq[p]:.2e}")
